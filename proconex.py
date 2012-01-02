@@ -15,7 +15,43 @@ _CONSUMPTION_DELAY = 0.3
 # Delay for ugly hacks and polling loops.
 _HACK_DELAY = 0.05
 
-class _Consumer(threading.Thread):
+
+class WorkEnv(object):
+    """
+    Environment in which production and consumption takes place and
+    information about a possible error is stored.  
+    """
+    def __init__(self):
+        self._queue = Queue.Queue()
+        self._error = None
+        self._failedConsumers = Queue.Queue()
+
+    def fail(self, failedConsumer, error):
+        """
+        Inform environment that ``consumer`` failed because of ``error``.
+        """
+        assert failedConsumer is not None
+        assert error is not None
+        self._error = error
+        self._failedConsumers.put(failedConsumer)
+
+    @property
+    def hasFailed(self):
+        """``True`` after `fail()` has been called."""
+        return not self._failedConsumers.empty()
+
+    @property
+    def queue(self):
+        """Queue containing items exchanged between producers and consumers."""
+        return self._queue
+
+    @property
+    def error(self):
+        """First error that prevents work from continuing."""
+        return self._error
+
+
+class Consumer(threading.Thread):
     """
     Thread to consume items from an item queue filled by a producer, which can
     be told to terminate in two ways:
@@ -25,12 +61,13 @@ class _Consumer(threading.Thread):
     2. using `cancel()`, which finishes consuming the current item and then
        terminates
     """
-    def __init__(self, name, itemQueue, failedConsumers):
-        super(_Consumer, self).__init__(name=name)
+    def __init__(self, name, workEnv):
+        assert name is not None
+        assert workEnv is not None
+
+        super(Consumer, self).__init__(name=name)
         self._log = logging.getLogger(name)
-        self._itemQueue = itemQueue
-        self._failedConsumers = failedConsumers
-        self.error = None
+        self._workEnv = workEnv
         self.itemToFailAt = None
         self._log.info(u"waiting for items to consume")
         self._isFinishing = False
@@ -50,13 +87,13 @@ class _Consumer(threading.Thread):
 
     def run(self):
         try:
-            while not (self._isFinishing and self._itemQueue.empty()) \
+            while not (self._isFinishing and self._workEnv.queue.empty()) \
                     and not self._isCanceled:
                 # HACK: Use a timeout when getting the item from the queue
                 # because between `empty()` and `get()` another consumer might
                 # have removed it.
                 try:
-                    item = self._itemQueue.get(timeout=_HACK_DELAY)
+                    item = self._workEnv.queue.get(timeout=_HACK_DELAY)
                     self.consume(item)
                 except Queue.Empty:
                     pass
@@ -66,8 +103,7 @@ class _Consumer(threading.Thread):
                 self._log.info(u"finished")
         except Exception, error:
             self._log.error(u"cannot continue to consume: %s", error)
-            self.error = error
-            self._failedConsumers.put(self)
+            self._workEnv.fail(self, error)
 
         
 class Worker(object):
@@ -80,16 +116,16 @@ class Worker(object):
         self._itemProducerFailsAt = itemProducerFailsAt
         self._itemConsumerFailsAt = itemConsumerFailsAt
         self._consumerCount = consumerCount
-        self._itemQueue = Queue.Queue()
-        self._failedConsumers = Queue.Queue()
+        self._workEnv = WorkEnv()
         self._log = logging.getLogger("producer")
         self._consumers = []
 
     def _possiblyRaiseConsumerError(self):
-            if not self._failedConsumers.empty():
-                failedConsumer = self._failedConsumers.get()
+            if self._workEnv.hasFailed:
+                # TODO: Clean up access to private ``_failedConsumers``.
+                failedConsumer = self._workEnv._failedConsumers.get()
                 self._log.info(u"handling failed %s", failedConsumer.name)
-                raise failedConsumer.error
+                raise self._workEnv.error
 
     def _cancelAllConsumers(self):
         self._log.info(u"canceling all consumers")
@@ -102,7 +138,7 @@ class Worker(object):
             possiblyCanceledConsumer.join(_HACK_DELAY)
             if possiblyCanceledConsumer.isAlive():
                 self._consumers.append(possiblyCanceledConsumer)
-        
+
     def work(self):
         """
         Launch consumer thread and produce items. In case any consumer or the
@@ -110,8 +146,7 @@ class Worker(object):
         """
         self.consumers = []
         for consumerId in range(self._consumerCount):
-            consumerToStart = _Consumer(u"consumer %d" % consumerId,
-                self._itemQueue, self._failedConsumers)
+            consumerToStart = Consumer(u"consumer %d" % consumerId, self._workEnv)
             self._consumers.append(consumerToStart)
             consumerToStart.start()
             if self._itemConsumerFailsAt is not None:
@@ -124,10 +159,10 @@ class Worker(object):
             self._possiblyRaiseConsumerError()
             self._log.info(u"produce item %d", itemNumber)
             if itemNumber == self._itemProducerFailsAt:
-                raise ValueError("ucannot produce item %d" % itemNumber)
+                raise ValueError(u"cannot produce item %d" % itemNumber)
             # Do the actual work.
             time.sleep(_PRODUCTION_DELAY)
-            self._itemQueue.put(itemNumber)
+            self._workEnv.queue.put(itemNumber)
 
         self._log.info(u"telling consumers to finish the remaining items")
         for consumerToFinish in self._consumers:
