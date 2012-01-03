@@ -3,6 +3,8 @@ Consumer/producer to test exception handling in threads. Both the producer
 and the consumer can be made to fail deliberately when processing a certain
 item using command line options.
 """
+from __future__ import with_statement
+
 import logging
 import optparse
 import Queue
@@ -15,6 +17,7 @@ _CONSUMPTION_DELAY = 0.3
 # Delay for ugly hacks and polling loops.
 _HACK_DELAY = 0.05
 
+_log = logging.getLogger("proconex")
 
 class WorkEnv(object):
     """
@@ -34,6 +37,12 @@ class WorkEnv(object):
         assert error is not None
         self._error = error
         self._failedConsumers.put(failedConsumer)
+
+    def possiblyRaiseError(self):
+        """"Provided that `hasFailed` raise `error`, otherwise do nothing."""
+        if self.hasFailed:
+            _log.info(u"raising notified error: %s", self.error)
+            raise self.error
 
     @property
     def hasFailed(self):
@@ -105,46 +114,73 @@ class Consumer(threading.Thread):
             self._log.error(u"cannot continue to consume: %s", error)
             self._workEnv.fail(self, error)
 
-        
+
+class Producer(object):
+    def items(self):
+        raise NotImplementedError()
+
+    def produce(self, workEnv):
+        assert workEnv is not None
+        for item in self.items():
+            workEnv.possiblyRaiseError()
+            workEnv.queue.put(item)
+
+
+class SleepyIntegerProducer(Producer):
+    def __init__(self, itemCount, itemProducerFailsAt=None):
+        assert itemCount >= 0
+        assert (itemProducerFailsAt is None) or (itemProducerFailsAt >= 0)
+        self._itemCount = itemCount
+        self._itemProducerFailsAt = itemProducerFailsAt
+        self._log = logging.getLogger("producer")
+
+    def items(self):
+        self._log.info(u"producing %d items", self._itemCount)
+        for item in xrange(self._itemCount):
+            self._log.info(u"produce item %d", item)
+            time.sleep(_PRODUCTION_DELAY)
+            if item == self._itemProducerFailsAt:
+                raise ValueError(u"cannot produce item %d" % item)
+            yield item
+
+
 class Worker(object):
     """
     Controller for interaction between producer and consumers.
     """
     def __init__(self, itemsToProduceCount, itemProducerFailsAt,
             itemConsumerFailsAt, consumerCount):
+        # Set up _consumers first so it is available for `__exit__()` even
+        # when `__init__()` fails.
+        self._consumers = None
+
+        # Set up the remaining attributes.
         self._itemsToProduceCount = itemsToProduceCount
         self._itemProducerFailsAt = itemProducerFailsAt
         self._itemConsumerFailsAt = itemConsumerFailsAt
         self._consumerCount = consumerCount
         self._workEnv = WorkEnv()
-        self._log = logging.getLogger("producer")
-        self._consumers = []
-
-    def _possiblyRaiseConsumerError(self):
-            if self._workEnv.hasFailed:
-                # TODO: Clean up access to private ``_failedConsumers``.
-                failedConsumer = self._workEnv._failedConsumers.get()
-                self._log.info(u"handling failed %s", failedConsumer.name)
-                raise self._workEnv.error
 
     def _cancelAllConsumers(self):
-        self._log.info(u"canceling all consumers")
-        for consumerToCancel in self._consumers:
-            consumerToCancel.cancel()
-        self._log.info(u"waiting for consumers to be canceled")
-        for possiblyCanceledConsumer in self._consumers:
-            # In this case, we ignore possible consumer errors because there
-            # already is an error to report.
-            possiblyCanceledConsumer.join(_HACK_DELAY)
-            if possiblyCanceledConsumer.isAlive():
-                self._consumers.append(possiblyCanceledConsumer)
+        if self._consumers is not None:
+            _log.info(u"canceling all consumers")
+            for consumerToCancel in self._consumers:
+                consumerToCancel.cancel()
+            _log.info(u"waiting for consumers to be canceled")
+            for possiblyCanceledConsumer in self._consumers:
+                # In this case, we ignore possible consumer errors because there
+                # already is an error to report.
+                possiblyCanceledConsumer.join(_HACK_DELAY)
+                if possiblyCanceledConsumer.isAlive():
+                    self._consumers.append(possiblyCanceledConsumer)
+        self.consumers = None
 
     def work(self):
         """
-        Launch consumer thread and produce items. In case any consumer or the
+        Launch consumer threads and produce items. In case any consumer or the
         producer raise an exception, fail by raising this exception  
         """
-        self.consumers = []
+        self._consumers = []
         for consumerId in range(self._consumerCount):
             consumerToStart = Consumer(u"consumer %d" % consumerId, self._workEnv)
             self._consumers.append(consumerToStart)
@@ -152,27 +188,38 @@ class Worker(object):
             if self._itemConsumerFailsAt is not None:
                 consumerToStart.itemToFailAt = self._itemConsumerFailsAt
         
-        self._log = logging.getLogger("producer  ")
-        self._log.info(u"producing %d items", self._itemsToProduceCount)
+        producer = SleepyIntegerProducer(self._itemsToProduceCount, self._itemProducerFailsAt)
+        producer.produce(self._workEnv)
     
-        for itemNumber in range(self._itemsToProduceCount):
-            self._possiblyRaiseConsumerError()
-            self._log.info(u"produce item %d", itemNumber)
-            if itemNumber == self._itemProducerFailsAt:
-                raise ValueError(u"cannot produce item %d" % itemNumber)
-            # Do the actual work.
-            time.sleep(_PRODUCTION_DELAY)
-            self._workEnv.queue.put(itemNumber)
-
-        self._log.info(u"telling consumers to finish the remaining items")
+        _log.info(u"telling consumers to finish the remaining items")
         for consumerToFinish in self._consumers:
             consumerToFinish.finish()
-        self._log.info(u"waiting for consumers to finish")
+        _log.info(u"waiting for consumers to finish")
         for possiblyFinishedConsumer in self._consumers:
-            self._possiblyRaiseConsumerError()
+            self._workEnv.possiblyRaiseError()
             possiblyFinishedConsumer.join(_HACK_DELAY)
             if possiblyFinishedConsumer.isAlive():
                 self._consumers.append(possiblyFinishedConsumer)
+        self._consumers = None
+
+    def close(self):
+        """
+        Close the whole production and consumption, releasing all resources
+        and stopping all threads.
+        
+        The simplest way to call this is by wrapping the worker in a ``with``
+        statement, for example:
+        
+        >>> with Worker(...) as worker:
+        ...    worker.work()
+        """
+        self._cancelAllConsumers()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
 
 if __name__ == "__main__":
@@ -189,12 +236,11 @@ if __name__ == "__main__":
     options, others = parser.parse_args()
     worker = Worker(options.items, options.producer_fails_at,
         options.consumer_fails_at, options.consumers)
-    try:
-        worker.work()
-        logging.info(u"processed all items")
-    except KeyboardInterrupt:
-        logging.warning(u"interrupted by user")
-        worker._cancelAllConsumers()
-    except Exception, error:
-        logging.error(u"%s", error)
-        worker._cancelAllConsumers()
+    with worker:
+        try:
+            worker.work()
+            _log.info(u"processed all items")
+        except KeyboardInterrupt:
+            _log.warning(u"interrupted by user")
+        except Exception, error:
+            _log.error(u"%s", error)
