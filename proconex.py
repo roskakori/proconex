@@ -13,12 +13,12 @@ Here is a simple producer that reads lines from a file:
 >>> import proconex
 >>> class LineProducer(proconex.Producer):
 ...     def __init__(self, fileToReadPath):
-...         super(LineProducer, self).__init__(name)
+...         super(LineProducer, self).__init__()
 ...         self._fileToReadPath = fileToReadPath
 ...     def items(self):
 ...         with open(self._fileToReadPath, 'rb') as fileToRead:
 ...             for lineNumber, line in enumerate(fileToRead, start=1):
-...                 yield (lineNumber, line.rstrip('\n\r'))
+...                 yield (lineNumber, line.rstrip('\\n\\r'))
 
 The constructor can take any parameters you need to set up the producer. In
 this case, all we need is the path to the file to read, ``fileToReadPath``.
@@ -60,7 +60,8 @@ to handle error and cleanup:
 ... except Exception, error:
 ...     print error
 ... finally:
-...    lineWorker.close()
+...    lineWorker.close() # doctest: +ELLIPSIS
+<proconex.Worker object at ...>
 
 Limitations
 ===========
@@ -279,13 +280,10 @@ class Worker(object):
     def close(self):
         """
         Close the whole production and consumption, releasing all resources
-        and stopping all threads.
+        and stopping all threads (in case there are still any running).
 
         The simplest way to call this is by wrapping the worker in a ``with``
-        statement, for example:
-
-        >>> with Worker(...) as worker:
-        ...    worker.work()
+        statement.
         """
         self._cancelAllConsumers()
 
@@ -294,3 +292,8 @@ class Worker(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()

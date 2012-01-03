@@ -10,6 +10,7 @@ Create the installer archive::
 
 Upload release to PyPI::
 
+  $ python proconex.py
   $ python test/test_proconex.py
   $ python setup.py sdist --formats=zip upload
 
