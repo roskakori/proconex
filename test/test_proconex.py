@@ -90,24 +90,24 @@ def _createWorker(
 
 class Test(unittest.TestCase):
     def testCanProduceAndConsume(self):
-        worker = _createWorker(10, None,  None)
+        worker = _createWorker(10, None, None)
         worker.work()
 
     def testCanProduceAndConsumeWithMultipleProducers(self):
-        worker = _createWorker(10, None,  None, 2, 3)
+        worker = _createWorker(10, None, None, 2, 3)
         worker._producers[1].firstItem = 10
         worker.work()
 
     def testCanProduceAndConsumeNothing(self):
-        worker = _createWorker(0, None,  None)
+        worker = _createWorker(0, None, None)
         worker.work()
 
     def testCanProduceLessThanAvailableConsumes(self):
-        worker = _createWorker(5, None,  None, 1, 10)
+        worker = _createWorker(5, None, None, 1, 10)
         worker.work()
 
     def testFailsOnConsumerError(self):
-        worker = _createWorker(10, None,  3)
+        worker = _createWorker(10, None, 3)
         try:
             worker.work()
             self.fail("consumer must fail")
@@ -117,7 +117,7 @@ class Test(unittest.TestCase):
             worker.close()
 
     def testFailsOnConsumerErrorAtLastItem(self):
-        worker = _createWorker(10, None,  9)
+        worker = _createWorker(10, None, 9)
         try:
             worker.work()
             self.fail("consumer must fail")

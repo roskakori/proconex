@@ -1,5 +1,9 @@
 *.pyc
 *.pyo
-dist
-MANIFEST
+/.coverage
+/MANIFEST
 /build
+/coverage.xml
+/dist
+/nosetests.xml
+/pep8.txt

@@ -8,9 +8,24 @@ leaving zombie threads.
 Example Usage
 =============
 
-Here is a simple producer that reads lines from a file:
+In order to use proconex, we need a few preparations.
+
+First, set up Python's logging:
+
+>>> import logging
+>>> logging.basicConfig(level=logging.INFO)
+
+In case you want to use the `with` statement to clean up and still use Python
+2.5, you need to import it:
+
+>>> from __future__ import with_statement
+
+And finally, we of course need to import proconex itself:
 
 >>> import proconex
+
+Here is a simple producer that reads lines from a file:
+
 >>> class LineProducer(proconex.Producer):
 ...     def __init__(self, fileToReadPath):
 ...         super(LineProducer, self).__init__()
@@ -37,7 +52,6 @@ by the producer above and prints its number and text:
 ...         lineNumber, line = item
 ...         if "self" in line:
 ...             print u"line %d: %s" % (lineNumber, line)
-line ...
 
 With classes for producer and consumer defined, we can create a producer and a
 list of consumers:
@@ -50,7 +64,8 @@ To actually start the production process, we need a worker to control the
 producer and consumers:
 
 >>> with proconex.Worker(producer, consumers) as lineWorker:
-...     lineWorker.work()
+...     lineWorker.work() # doctest: +ELLIPSIS
+line ...
 
 The with statement makes sure that all threads are terminated once the worker
 finished or failed. Alternatively you can use ``try ... except ... finally``
@@ -65,7 +80,7 @@ to handle errors and cleanup:
 ... except Exception, error:
 ...     print error
 ... finally:
-...    lineWorker.close()
+...    lineWorker.close() # doctest: +ELLIPSIS
 line ...
 
 Limitations
@@ -146,7 +161,7 @@ class WorkEnv(object):
     def possiblyRaiseError(self):
         """"Provided that `hasFailed` raise `error`, otherwise do nothing."""
         if self.hasFailed:
-            _log.info(u"raising notified error: %s", self.error)
+            _log.debug(u"raising notified error: %s", self.error)
             raise self.error
 
     @property
@@ -193,6 +208,11 @@ class Producer(_CancelableThread):
     """
     Producer putting items on a `WorkEnv`'s queue.
     """
+    def __init__(self, name="producer"):
+        assert name is not None
+
+        super(Producer, self).__init__(name)
+
     def items(self):
         """
         A sequence of items to produce. Typically this is implemented as
@@ -216,7 +236,7 @@ class Producer(_CancelableThread):
                     except Queue.Full:
                         pass
         except Exception, error:
-            self.log.error(u"cannot continue to produce: %s", error)
+            self.log.warning(u"cannot continue to produce: %s", error)
             self.workEnv.fail(self, error)
 
 
@@ -230,12 +250,12 @@ class Consumer(_CancelableThread):
     2. using `cancel()`, which finishes consuming the current item and then
        terminates
     """
-    def __init__(self, name):
+    def __init__(self, name="consumer"):
         assert name is not None
 
         super(Consumer, self).__init__(name)
         self._isFinishing = False
-        self.log.info(u"waiting for items to consume")
+        self.log.debug(u"waiting for items to consume")
 
     def finish(self):
         self._isFinishing = True
@@ -257,11 +277,11 @@ class Consumer(_CancelableThread):
                 except Queue.Empty:
                     pass
             if self._isCanceled:
-                self.log.info(u"canceled")
+                self.log.debug(u"canceled")
             if self._isFinishing:
-                self.log.info(u"finished")
+                self.log.debug(u"finished")
         except Exception, error:
-            self.log.error(u"cannot continue to consume: %s", error)
+            self.log.warning(u"cannot continue to consume: %s", error)
             self.workEnv.fail(self, error)
 
 
@@ -292,10 +312,10 @@ class Worker(object):
     def _cancelThreads(self, name, threadsToCancel):
         assert name
         if threadsToCancel is not None:
-            _log.info(u"canceling all %s", name)
+            _log.debug(u"canceling all %s", name)
             for threadToCancel in threadsToCancel:
                 threadToCancel.cancel()
-            _log.info(u"waiting for %s to be canceled", name)
+            _log.debug(u"waiting for %s to be canceled", name)
             for possiblyCanceledThread in threadsToCancel:
                 # In this case, we ignore possible errors because there
                 # already is an error to report.
@@ -316,16 +336,16 @@ class Worker(object):
         """
         assert self._consumers is not None, "work() must be called only once"
 
-        _log.info(u"starting consumers")
+        _log.debug(u"starting consumers")
         for consumerToStart in self._consumers:
             consumerToStart.workEnv = self._workEnv
             consumerToStart.start()
-        _log.info(u"starting producers")
+        _log.debug(u"starting producers")
         for producerToStart in self._producers:
             producerToStart.workEnv = self._workEnv
             producerToStart.start()
 
-        _log.info(u"waiting for producers to finish")
+        _log.debug(u"waiting for producers to finish")
         for possiblyFinishedProducer in self._producers:
             self._workEnv.possiblyRaiseError()
             while possiblyFinishedProducer.isAlive():
@@ -333,10 +353,10 @@ class Worker(object):
                 self._workEnv.possiblyRaiseError()
         self._producers = None
 
-        _log.info(u"telling consumers to finish the remaining items")
+        _log.debug(u"telling consumers to finish the remaining items")
         for consumerToFinish in self._consumers:
             consumerToFinish.finish()
-        _log.info(u"waiting for consumers to finish")
+        _log.debug(u"waiting for consumers to finish")
         for possiblyFinishedConsumer in self._consumers:
             self._workEnv.possiblyRaiseError()
             possiblyFinishedConsumer.join(_HACK_DELAY)
