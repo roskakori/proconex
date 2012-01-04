@@ -32,17 +32,19 @@ _log = logging.getLogger("test_proconex")
 
 
 class SleepyIntegerProducer(proconex.Producer):
-    def __init__(self, itemCount, itemProducerFailsAt=None):
+    def __init__(self, name, itemCount, itemProducerFailsAt=None):
+        assert name
         assert itemCount >= 0
         assert (itemProducerFailsAt is None) or (itemProducerFailsAt >= 0)
+        super(SleepyIntegerProducer, self).__init__(name)
         self._itemCount = itemCount
         self._itemProducerFailsAt = itemProducerFailsAt
-        self._log = logging.getLogger("producer")
+        self.firstItem = 0
 
     def items(self):
-        self._log.info(u"producing %d items", self._itemCount)
-        for item in xrange(self._itemCount):
-            self._log.info(u"produce item %d", item)
+        self.log.info(u"producing %d items", self._itemCount)
+        for item in xrange(self.firstItem, self.firstItem + self._itemCount):
+            self.log.info(u"produce item %d", item)
             time.sleep(_PRODUCTION_DELAY)
             if item == self._itemProducerFailsAt:
                 raise ValueError(u"cannot produce item %d" % item)
@@ -51,11 +53,12 @@ class SleepyIntegerProducer(proconex.Producer):
 
 class SleepyIntegerConsumer(proconex.Consumer):
     def __init__(self, name, itemConsumerFailsAt=None):
+        assert name
         super(SleepyIntegerConsumer, self).__init__(name)
         self._itemConsumerFailsAt = itemConsumerFailsAt
 
     def consume(self, item):
-        self._log.info(u"consume item %d", item)
+        self.log.info(u"consume item %d", item)
         if item == self._itemConsumerFailsAt:
             raise ValueError("cannot consume item %d" % item)
         time.sleep(_CONSUMPTION_DELAY)
@@ -63,36 +66,48 @@ class SleepyIntegerConsumer(proconex.Consumer):
 
 def _createWorker(
         itemCount=10, producerFailsAt=None, consumerFailsAt=None,
-        customerCount=2
+        producerCount=1, customerCount=2
     ):
     # Create producer and consumers.
-    producer = SleepyIntegerProducer(itemCount, producerFailsAt)
+    producers = []
+    for producerId in xrange(producerCount):
+        producerToStart = SleepyIntegerProducer(
+            u"producer.%d" % producerId,
+            itemCount,
+            producerFailsAt
+        )
+        producers.append(producerToStart)
     consumers = []
     for consumerId in xrange(customerCount):
         consumerToStart = SleepyIntegerConsumer(
-            u"consumer %d" % consumerId,
+            u"consumer.%d" % consumerId,
             consumerFailsAt
         )
         consumers.append(consumerToStart)
 
-    return proconex.Worker(producer, consumers)
+    return proconex.Worker(producers, consumers)
 
 
 class Test(unittest.TestCase):
     def testCanProduceAndConsume(self):
-        worker = _createWorker(10, None,  None, 2)
+        worker = _createWorker(10, None,  None)
+        worker.work()
+
+    def testCanProduceAndConsumeWithMultipleProducers(self):
+        worker = _createWorker(10, None,  None, 2, 3)
+        worker._producers[1].firstItem = 10
         worker.work()
 
     def testCanProduceAndConsumeNothing(self):
-        worker = _createWorker(0, None,  None, 2)
+        worker = _createWorker(0, None,  None)
         worker.work()
 
     def testCanProduceLessThanAvailableConsumes(self):
-        worker = _createWorker(5, None,  None, 10)
+        worker = _createWorker(5, None,  None, 1, 10)
         worker.work()
 
     def testFailsOnConsumerError(self):
-        worker = _createWorker(10, None,  3, 2)
+        worker = _createWorker(10, None,  3)
         try:
             worker.work()
             self.fail("consumer must fail")
@@ -102,7 +117,7 @@ class Test(unittest.TestCase):
             worker.close()
 
     def testFailsOnConsumerErrorAtLastItem(self):
-        worker = _createWorker(10, None,  9, 2)
+        worker = _createWorker(10, None,  9)
         try:
             worker.work()
             self.fail("consumer must fail")
@@ -112,7 +127,7 @@ class Test(unittest.TestCase):
             worker.close()
 
     def testFailsOnProducerError(self):
-        worker = _createWorker(10, 3, None, 2)
+        worker = _createWorker(10, 3, None)
         try:
             worker.work()
             self.fail("producer must fail")
@@ -170,5 +185,5 @@ def main(argv=None):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # import sys;sys.argv = ['', 'Test.testFailsOnConsumerErrorAtLastItem']
+    # import sys;sys.argv = ['', 'Test.testCanProduceAndConsume']
     unittest.main()

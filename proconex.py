@@ -34,14 +34,16 @@ by the producer above and prints its number and text:
 
 >>> class LineConsumer(proconex.Consumer):
 ...     def consume(self, item):
-...         if "self" in item:
-...             print line
+...         lineNumber, line = item
+...         if "self" in line:
+...             print u"line %d: %s" % (lineNumber, line)
+line ...
 
 With classes for producer and consumer defined, we can create a producer and a
 list of consumers:
 
 >>> producer =  LineProducer(__file__)
->>> consumers = [LineConsumer("consumer#%d" % consumerId) 
+>>> consumers = [LineConsumer("consumer#%d" % consumerId)
 ...         for consumerId in xrange(3)]
 
 To actually start the production process, we need a worker to control the
@@ -52,35 +54,42 @@ producer and consumers:
 
 The with statement makes sure that all threads are terminated once the worker
 finished or failed. Alternatively you can use ``try ... except ... finally``
-to handle error and cleanup:
+to handle errors and cleanup:
 
+>>> producer =  LineProducer(__file__)
+>>> consumers = [LineConsumer("consumer#%d" % consumerId)
+...         for consumerId in xrange(3)]
 >>> lineWorker = proconex.Worker(producer, consumers)
 >>> try:
-...     lineWorker
+...     lineWorker.work()
 ... except Exception, error:
 ...     print error
 ... finally:
-...    lineWorker.close() # doctest: +ELLIPSIS
-<proconex.Worker object at ...>
+...    lineWorker.close()
+line ...
 
 Limitations
 ===========
 
 When using proconex, there are a few things you should be aware of:
 
- * Due to Python's ``GlobalLock``, either or both producer and consumer should
-    be I/O bound in order to allow thread switches.
- * The code contains a few polling loops because ``Queue`` does 
-    not support canceling `get()` and `put()`. However, the polling does not
-    drain the CPU because it uses a timeout when waiting for events to happen.
- * The only way to recover from errors during production is to restart the
-    whole process from the beginning.
+* Due to Python's ``GlobalLock``, either or both producer and consumer should
+   be I/O bound in order to allow thread switches.
+* The code contains a few polling loops because ``Queue`` does
+   not support canceling `get()` and `put()`. However, the polling does not
+   drain the CPU because it uses a timeout when waiting for events to happen.
+* The only way to recover from errors during production is to restart the
+   whole process from the beginning.
 
 If you need more flexibility and control than proconex offers, try
 `celery <http://celeryproject.org/>`_.
 
 Version history
 ===============
+
+Version 0.2, 2012-02-03
+
+* ...
 
 Version 0.1, 2012-02-03
 
@@ -106,7 +115,7 @@ import logging
 import Queue
 import threading
 
-__version__ = "0.1"
+__version__ = "0.2"
 
 # Delay in seconds for ugly polling hacks.
 _HACK_DELAY = 0.02
@@ -155,7 +164,31 @@ class WorkEnv(object):
         return self._error
 
 
-class Producer(object):
+class _CancelableThread(threading.Thread):
+    """
+    Thread that can be canceled using `cancel()`.
+    """
+    def __init__(self, name):
+        assert name is not None
+
+        super(_CancelableThread, self).__init__(name=name)
+        self._log = logging.getLogger(u"proconex.%s" % name)
+        self._isCanceled = False
+        self.workEnv = None
+
+    def cancel(self):
+        self._isCanceled = True
+
+    @property
+    def isCanceled(self):
+        return self._isCanceled
+
+    @property
+    def log(self):
+        return self._log
+
+
+class Producer(_CancelableThread):
     """
     Producer putting items on a `WorkEnv`'s queue.
     """
@@ -166,17 +199,27 @@ class Producer(object):
         """
         raise NotImplementedError()
 
-    def produce(self, workEnv):
+    def run(self):
         """
         Process `items()`. Normally there is no need to modify this procedure.
         """
-        assert workEnv is not None
-        for item in self.items():
-            workEnv.possiblyRaiseError()
-            workEnv.queue.put(item)
+        assert self.workEnv is not None
+        try:
+            for item in self.items():
+                itemHasBeenPut = False
+                while not itemHasBeenPut:
+                    self.workEnv.possiblyRaiseError()
+                    try:
+                        self.workEnv.queue.put(item, True, _HACK_DELAY)
+                        itemHasBeenPut = True
+                    except Queue.Full:
+                        pass
+        except Exception, error:
+            self.log.error(u"cannot continue to produce: %s", error)
+            self.workEnv.fail(self, error)
 
 
-class Consumer(threading.Thread):
+class Consumer(_CancelableThread):
     """
     Thread to consume items from an item queue filled by a producer, which can
     be told to terminate in two ways:
@@ -189,70 +232,77 @@ class Consumer(threading.Thread):
     def __init__(self, name):
         assert name is not None
 
-        super(Consumer, self).__init__(name=name)
-        self._log = logging.getLogger(name)
-        self.itemToFailAt = None
+        super(Consumer, self).__init__(name)
         self._isFinishing = False
-        self._isCanceled = False
-        self._workEnv = None
-        self._log.info(u"waiting for items to consume")
+        self.log.info(u"waiting for items to consume")
 
     def finish(self):
         self._isFinishing = True
-
-    def cancel(self):
-        self._isCanceled = True
 
     def consume(self, item):
         raise NotImplementedError("Consumer.consume()")
 
     def run(self):
-        assert self._workEnv is not None
+        assert self.workEnv is not None
         try:
-            while not (self._isFinishing and self._workEnv.queue.empty()) \
+            while not (self._isFinishing and self.workEnv.queue.empty()) \
                     and not self._isCanceled:
                 # HACK: Use a timeout when getting the item from the queue
                 # because between `empty()` and `get()` another consumer might
                 # have removed it.
                 try:
-                    item = self._workEnv.queue.get(timeout=_HACK_DELAY)
+                    item = self.workEnv.queue.get(timeout=_HACK_DELAY)
                     self.consume(item)
                 except Queue.Empty:
                     pass
             if self._isCanceled:
-                self._log.info(u"canceled")
+                self.log.info(u"canceled")
             if self._isFinishing:
-                self._log.info(u"finished")
+                self.log.info(u"finished")
         except Exception, error:
-            self._log.error(u"cannot continue to consume: %s", error)
-            self._workEnv.fail(self, error)
+            self.log.error(u"cannot continue to consume: %s", error)
+            self.workEnv.fail(self, error)
 
 
 class Worker(object):
     """
-    Controller for interaction between producer and consumers.
+    Controller for interaction between producers and consumers.
     """
-    def __init__(self, producer, consumers):
-        assert producer is not None
+    def __init__(self, producers, consumers):
+        assert producers is not None
         assert consumers is not None
 
-        self._producer = producer
-        self._consumers = consumers
+        # TODO: Consider using tuples instead of lists for producers and
+        # consumers.
+        if isinstance(producers, Producer):
+            self._producers = [producers]
+        else:
+            self._producers = list(producers)
+        if isinstance(consumers, Consumer):
+            self._consumers = [consumers]
+        else:
+            self._consumers = list(consumers)
         self._workEnv = WorkEnv()
 
-    def _cancelAllConsumers(self):
-        if self._consumers is not None:
-            _log.info(u"canceling all consumers")
-            for consumerToCancel in self._consumers:
-                consumerToCancel.cancel()
-            _log.info(u"waiting for consumers to be canceled")
-            for possiblyCanceledConsumer in self._consumers:
-                # In this case, we ignore possible consumer errors because
-                # there already is an error to report.
-                possiblyCanceledConsumer.join(_HACK_DELAY)
-                if possiblyCanceledConsumer.isAlive():
-                    self._consumers.append(possiblyCanceledConsumer)
+    def _cancelThreads(self, name, threadsToCancel):
+        assert name
+        if threadsToCancel is not None:
+            _log.info(u"canceling all %s", name)
+            for threadToCancel in threadsToCancel:
+                threadToCancel.cancel()
+            _log.info(u"waiting for %s to be canceled", name)
+            for possiblyCanceledThread in threadsToCancel:
+                # In this case, we ignore possible errors because there
+                # already is an error to report.
+                possiblyCanceledThread.join(_HACK_DELAY)
+                if possiblyCanceledThread.isAlive():
+                    threadsToCancel.append(possiblyCanceledThread)
+
+    def _cancelAllConsumersAndProducers(self):
+        self._cancelThreads("consumers", self._consumers)
         self.consumers = None
+        self._cancelThreads("producers", self._producers)
+        self._producers = None
 
     def work(self):
         """
@@ -261,10 +311,22 @@ class Worker(object):
         """
         assert self._consumers is not None, "work() must be called only once"
 
+        _log.info(u"starting consumers")
         for consumerToStart in self._consumers:
-            consumerToStart._workEnv = self._workEnv
+            consumerToStart.workEnv = self._workEnv
             consumerToStart.start()
-        self._producer.produce(self._workEnv)
+        _log.info(u"starting producers")
+        for producerToStart in self._producers:
+            producerToStart.workEnv = self._workEnv
+            producerToStart.start()
+
+        _log.info(u"waiting for producers to finish")
+        for possiblyFinishedProducer in self._producers:
+            self._workEnv.possiblyRaiseError()
+            while possiblyFinishedProducer.isAlive():
+                possiblyFinishedProducer.join(_HACK_DELAY)
+                self._workEnv.possiblyRaiseError()
+        self._producers = None
 
         _log.info(u"telling consumers to finish the remaining items")
         for consumerToFinish in self._consumers:
@@ -285,7 +347,7 @@ class Worker(object):
         The simplest way to call this is by wrapping the worker in a ``with``
         statement.
         """
-        self._cancelAllConsumers()
+        self._cancelAllConsumersAndProducers()
 
     def __enter__(self):
         return self
