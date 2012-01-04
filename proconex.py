@@ -99,15 +99,27 @@ When using proconex, there are a few things you should be aware of:
 If you need more flexibility and control than proconex offers, try
 `celery <http://celeryproject.org/>`_.
 
+Source code
+===========
+
+Proconex is distributed under the GNU Lesser General Public License, version 3
+or later.
+
+The source code is available from <https://github.com/roskakori/proconex>.
+
 Version history
 ===============
 
-Version 0.2, 2012-02-04
+Version 0.3, 2012-01-05
+
+* ...
+
+Version 0.2, 2012-01-04
 
 * Added support for multiple producers.
 * Added limit for queue size. By default it is twice the number of consumers.
 
-Version 0.1, 2012-02-03
+Version 0.1, 2012-01-03
 
 * Initial public release.
 """
