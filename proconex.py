@@ -73,8 +73,8 @@ Limitations
 
 When using proconex, there are a few things you should be aware of:
 
-* Due to Python's ``GlobalLock``, either or both producer and consumer should
-   be I/O bound in order to allow thread switches.
+* Due to Python's Global Interpreter Lock (GIL), at least one of producer and
+   consumer should be I/O bound in order to allow thread switches.
 * The code contains a few polling loops because ``Queue`` does
    not support canceling `get()` and `put()`. However, the polling does not
    drain the CPU because it uses a timeout when waiting for events to happen.
@@ -87,9 +87,10 @@ If you need more flexibility and control than proconex offers, try
 Version history
 ===============
 
-Version 0.2, 2012-02-03
+Version 0.2, 2012-02-04
 
-* ...
+* Added support for multiple producers.
+* Added limit for queue size. By default it is twice the number of consumers.
 
 Version 0.1, 2012-02-03
 
@@ -128,8 +129,8 @@ class WorkEnv(object):
     Environment in which production and consumption takes place and
     information about a possible error is stored.
     """
-    def __init__(self):
-        self._queue = Queue.Queue()
+    def __init__(self, queueSize):
+        self._queue = Queue.Queue(queueSize)
         self._error = None
         self._failedConsumers = Queue.Queue()
 
@@ -268,7 +269,7 @@ class Worker(object):
     """
     Controller for interaction between producers and consumers.
     """
-    def __init__(self, producers, consumers):
+    def __init__(self, producers, consumers, queueSize=None):
         assert producers is not None
         assert consumers is not None
 
@@ -282,7 +283,11 @@ class Worker(object):
             self._consumers = [consumers]
         else:
             self._consumers = list(consumers)
-        self._workEnv = WorkEnv()
+        if queueSize is None:
+            actualQueueSize = 2 * len(self._consumers)
+        else:
+            actualQueueSize = queueSize
+        self._workEnv = WorkEnv(actualQueueSize)
 
     def _cancelThreads(self, name, threadsToCancel):
         assert name

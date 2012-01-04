@@ -25,8 +25,8 @@ import unittest
 
 import proconex
 
-_PRODUCTION_DELAY = 0.1
-_CONSUMPTION_DELAY = 0.3
+_PRODUCTION_DELAY = 0.05
+_CONSUMPTION_DELAY = 0.15
 
 _log = logging.getLogger("test_proconex")
 
@@ -161,7 +161,7 @@ def main(argv=None):
         parser.error(u"unknown options must be removed: %s" % others)
 
     # Create producer and consumers.
-    producer = SleepyIntegerProducer(options.items, options.producer_fails_at)
+    producer = SleepyIntegerProducer("producer", options.items, options.producer_fails_at)
     consumers = []
     for consumerId in xrange(options.consumers):
         consumerToStart = SleepyIntegerConsumer(
