@@ -64,6 +64,20 @@ class SleepyIntegerConsumer(proconex.Consumer):
         time.sleep(_CONSUMPTION_DELAY)
 
 
+class SleepySquareConvertingConsumer(proconex.ConvertingConsumer):
+    def __init__(self, name, itemConsumerFailsAt=None):
+        assert name
+        super(SleepySquareConvertingConsumer, self).__init__(name)
+        self._itemConsumerFailsAt = itemConsumerFailsAt
+
+    def consume(self, item):
+        self.log.info(u"convert item %d", item)
+        if item == self._itemConsumerFailsAt:
+            raise ValueError("cannot convert item %d" % item)
+        time.sleep(_CONSUMPTION_DELAY)
+        self.addItem(item * item)
+
+
 def _createWorker(
         itemCount=10, producerFailsAt=None, consumerFailsAt=None,
         producerCount=1, customerCount=2
@@ -88,7 +102,7 @@ def _createWorker(
     return proconex.Worker(producers, consumers)
 
 
-class Test(unittest.TestCase):
+class WorkerTest(unittest.TestCase):
     def testCanProduceAndConsume(self):
         worker = _createWorker(10, None, None)
         worker.work()
@@ -136,6 +150,61 @@ class Test(unittest.TestCase):
         finally:
             worker.close()
 
+
+def _createConverter(
+        itemCount=5, producerFailsAt=None, consumerFailsAt=None,
+        producerCount=1, customerCount=2
+    ):
+    # Create producer and consumers.
+    producers = []
+    for producerId in xrange(producerCount):
+        producerToStart = SleepyIntegerProducer(
+            u"producer.%d" % producerId,
+            itemCount,
+            producerFailsAt
+        )
+        producers.append(producerToStart)
+    consumers = []
+    for consumerId in xrange(customerCount):
+        consumerToStart = SleepySquareConvertingConsumer(
+            u"consumer.%d" % consumerId,
+            consumerFailsAt
+        )
+        consumers.append(consumerToStart)
+
+    return proconex.Converter(producers, consumers)
+
+
+class ConverterTest(unittest.TestCase):
+    def testCanConvertSquares(self):
+        with _createConverter(5) as converter:
+            squares = sorted([item for item in converter.items()])
+        self.assertEquals(squares, [0, 1, 4, 9, 16])
+
+    def testFailsOnConvertingConsumerError(self):
+        converter = _createConverter(consumerFailsAt=3)
+        try:
+            for _ in converter.items():
+                pass
+            self.fail("consumer must fail")
+        except ValueError, error:
+            self.assertTrue("convert" in unicode(error))
+        finally:
+            converter.close()
+
+    def testFailsOnConvertingProducerError(self):
+        converter = _createConverter(producerFailsAt=3)
+        try:
+            for _ in converter.items():
+                pass
+            self.fail("producer must fail")
+        except ValueError, error:
+            self.assertTrue("produce" in unicode(error))
+        finally:
+            converter.close()
+
+
+class MainTest(unittest.TestCase):
     def testCanRunMainWithDefaults(self):
         exitCode = main(["test_proconex"])
         self.assertEquals(exitCode, 0)
@@ -184,6 +253,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    # import sys;sys.argv = ['', 'Test.testCanProduceAndConsume']
+    logging.basicConfig(level=logging.DEBUG)
+    # import sys;sys.argv = ['', 'ConverterTest.testFailsOnConvertingConsumerError']
     unittest.main()
