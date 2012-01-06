@@ -85,8 +85,8 @@ line ...
 
 Additionally to ``Worker`` there also is a ``Converter``, which  not only
 produces and consumes items but also yields converted items. While
-``Converter``s use the same ``Producer``s as ``Worker``s it requires different
-consumers based on ``ConvertingConsumer``. Such a consumer has a
+``Converter``s use the same ``Producer``s as ``Worker``s, they require
+different consumers based on ``ConvertingConsumer``. Such a consumer has a
 ``addItem()`` which ``consume()`` should use to add the converted item.
 
 Here is an example for a consumer that converts consumed integer numbers to
@@ -123,8 +123,9 @@ When using proconex, there are a few things you should be aware of:
 * Due to Python's Global Interpreter Lock (GIL), at least one of producer and
    consumer should be I/O bound in order to allow thread switches.
 * The code contains a few polling loops because ``Queue`` does
-   not support canceling `get()` and `put()`. However, the polling does not
-   drain the CPU because it uses a timeout when waiting for events to happen.
+   not support canceling `get()` and `put()`. The polling does not drain the
+   CPU because it uses a timeout when waiting for events to happen. Still,
+   there is room for improvement and contributions are welcome.
 * The only way to recover from errors during production is to restart the
    whole process from the beginning.
 
@@ -142,10 +143,12 @@ The source code is available from <https://github.com/roskakori/proconex>.
 Version history
 ===============
 
-Version 0.3, 2012-01-05
+Version 0.3, 2012-01-06
 
 * Added ``Converter`` class, which is similar to ``Worker`` but expects
   consumers to yield results the caller can process.
+* Changed exceptions raised by producer and consumer to preserve their stack
+  trace when passed to the ``Worker`` or ``Converter``.  
 
 Version 0.2, 2012-01-04
 
@@ -174,9 +177,10 @@ from __future__ import with_statement
 
 import logging
 import Queue
+import sys
 import threading
 
-__version__ = "0.2"
+__version__ = "0.3"
 
 # Delay in seconds for ugly polling hacks.
 _HACK_DELAY = 0.02
@@ -187,27 +191,26 @@ _log = logging.getLogger("proconex")
 class WorkEnv(object):
     """
     Environment in which production and consumption takes place and
-    information about a possible error is stored.
+    information about a possible exc_info is stored.
     """
     def __init__(self, queueSize):
         self._queue = Queue.Queue(queueSize)
-        self._error = None
+        self._exc_info = None
         self._failedConsumers = Queue.Queue()
 
-    def fail(self, failedConsumer, error):
+    def fail(self, failedConsumer):
         """
-        Inform environment that ``consumer`` failed because of ``error``.
+        Inform environment that ``consumer`` failed because of ``exc_info``.
         """
         assert failedConsumer is not None
-        assert error is not None
-        self._error = error
+        self._exc_info = sys.exc_info()
         self._failedConsumers.put(failedConsumer)
 
     def possiblyRaiseError(self):
-        """"Provided that `hasFailed` raise `error`, otherwise do nothing."""
+        """"Provided that `hasFailed` raise `exc_info`, otherwise do nothing."""
         if self.hasFailed:
-            _log.debug(u"raising notified error: %s", self.error)
-            raise self.error
+            _log.debug(u"raising notified error: %s", self.exc_info[1])
+            raise self.exc_info[0], self.exc_info[1], self.exc_info[2]
 
     @property
     def hasFailed(self):
@@ -220,9 +223,9 @@ class WorkEnv(object):
         return self._queue
 
     @property
-    def error(self):
-        """First error that prevents work from continuing."""
-        return self._error
+    def exc_info(self):
+        """First exc_info that prevents work from continuing."""
+        return self._exc_info
 
 
 class _CancelableThread(threading.Thread):
@@ -282,7 +285,7 @@ class Producer(_CancelableThread):
                         pass
         except Exception, error:
             self.log.warning(u"cannot continue to produce: %s", error)
-            self.workEnv.fail(self, error)
+            self.workEnv.fail(self)
 
 
 class Consumer(_CancelableThread):
@@ -327,7 +330,7 @@ class Consumer(_CancelableThread):
                 self.log.debug(u"finished")
         except Exception, error:
             self.log.warning(u"cannot continue to consume: %s", error)
-            self.workEnv.fail(self, error)
+            self.workEnv.fail(self)
 
 
 class _BaseWorker(object):
@@ -363,7 +366,7 @@ class _BaseWorker(object):
             _log.debug(u"waiting for %s to be canceled", name)
             for possiblyCanceledThread in threadsToCancel:
                 # In this case, we ignore possible errors because there
-                # already is an error to report.
+                # already is an exc_info to report.
                 possiblyCanceledThread.join(_HACK_DELAY)
                 if possiblyCanceledThread.isAlive():
                     threadsToCancel.append(possiblyCanceledThread)
