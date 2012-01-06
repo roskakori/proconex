@@ -18,7 +18,6 @@ Tag a release::
 
   $ git tag -a -m "Tagged version 1.x." v1.x
   $ git push --tags
-
 """
 # Copyright (C) 2012 Thomas Aglassinger
 #
