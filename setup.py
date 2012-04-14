@@ -6,13 +6,11 @@ Developer cheat sheet
 
 Create the installer archive::
 
-  $ python setup.py sdist --formats=zip
+  $ ant sdist
 
 Upload release to PyPI::
 
-  $ python proconex.py
-  $ python test/test_proconex.py
-  $ python setup.py sdist --formats=zip upload
+  $ ant sdist_upload
 
 Tag a release::
 
