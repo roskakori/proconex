@@ -6,6 +6,7 @@
     <property name="build" location="build" />
     <property name="dist" location="dist" />
     <property name="slocdata.dir" location="${basedir}/slocdata" />
+    <property name="slocsource.dir" location="${basedir}/slocsource" />
 
     <macrodef name="pyst">
         <!-- Macro to run a setup.py command. -->
@@ -81,21 +82,31 @@
             <fileset dir="." includes="coverage.xml, nosetests.xml, pep8.txt, sloccount.sc" />
         </delete>
         <delete dir="${build}" />
+        <delete dir="${slocdata.dir}" />
+        <delete dir="${slocsource.dir}" />
     </target>
 
     <target name="sloccount" description="build sloccount report">
         <mkdir dir="${slocdata.dir}" />
+        <mkdir dir="${slocsource.dir}" />
         <echo message="build sloccount report" />
+    	    <!-- 
+    	    HACK: Copy source code to subfolder to prevent 
+    	    StringIndexOutOfBoundsException from SloccountPublisher
+    	    -->
+    	    <copy todir="${slocsource.dir}">
+            <fileset dir="." includes="*.py" />
+            <fileset dir="test" includes="*.py" />
+    	    </copy>
         <exec executable="sloccount" failonerror="true">
             <arg value="--details" />
             <arg value="--wide" />
             <arg value="--datadir" />
             <arg file="${slocdata.dir}" />
-            <arg value="proconex.py" />
-            <arg value="setup.py" />
-            <arg value="test" />
+            <arg file="${slocsource.dir}" />
             <redirector output="sloccount.sc" />
         </exec>
+        <delete dir="${slocsource.dir}" />
         <delete dir="${slocdata.dir}" />
     </target>
 
