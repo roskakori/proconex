@@ -105,7 +105,7 @@ A fitting producer for integer numbers between 0 and 4 is:
 
 Combining these in a converter, we get:
 
->>> with proconex.Converter(IntegerProducer("producer"), 
+>>> with proconex.Converter(IntegerProducer("producer"),
 ...         SquareConvertingIntegerConsumer("consumer")) as converter:
 ...     for item in converter.items():
 ...         print item
@@ -143,12 +143,17 @@ The source code is available from <https://github.com/roskakori/proconex>.
 Version history
 ===============
 
+Version 0.4, 2012-04-14
+
+* Fixed occasional premature termination of ``Converter`` which could lead to
+  the consumers ignoring the last few items put on the queue by the producer.
+
 Version 0.3, 2012-01-06
 
 * Added ``Converter`` class, which is similar to ``Worker`` but expects
   consumers to yield results the caller can process.
 * Changed exceptions raised by producer and consumer to preserve their stack
-  trace when passed to the ``Worker`` or ``Converter``.  
+  trace when passed to the ``Worker`` or ``Converter``.
 
 Version 0.2, 2012-01-04
 
@@ -180,7 +185,7 @@ import Queue
 import sys
 import threading
 
-__version__ = "0.3"
+__version__ = "0.4"
 
 # Delay in seconds for ugly polling hacks.
 _HACK_DELAY = 0.02
@@ -507,7 +512,7 @@ class Converter(_BaseWorker):
         producersAreFinished = False
         consumersAreFinished = False
         # TODO: Replace ugly thread counting by some kind of notification.
-        while not (producersAreFinished and consumersAreFinished):
+        while not (producersAreFinished and consumersAreFinished and self._itemQueue.empty()):
             self._workEnv.possiblyRaiseError()
             if producersAreFinished:
                 if self._aliveCount(self._consumers) == 0:
