@@ -91,14 +91,10 @@
             <arg value="--wide" />
             <arg value="--datadir" />
             <arg file="${slocdata.dir}" />
-            <arg value="cutplace" />
-            <redirector output="sloccount.sc">
-                <outputfilterchain>
-                    <linecontains negate="true">
-                        <contains value=".svn" />
-                    </linecontains>
-                </outputfilterchain>
-            </redirector>
+            <arg value="proconex.py" />
+            <arg value="setup.py" />
+            <arg value="test" />
+            <redirector output="sloccount.sc" />
         </exec>
         <delete dir="${slocdata.dir}" />
     </target>
