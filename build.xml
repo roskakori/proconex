@@ -5,6 +5,7 @@
     <property name="test.dir" location="test" />
     <property name="build" location="build" />
     <property name="dist" location="dist" />
+    <property name="slocdata.dir" location="${basedir}/slocdata" />
 
     <macrodef name="pyst">
         <!-- Macro to run a setup.py command. -->
@@ -83,10 +84,14 @@
     </target>
 
     <target name="sloccount" description="build sloccount report">
+        <mkdir dir="${slocdata.dir}" />
         <echo message="build sloccount report" />
         <exec executable="sloccount" failonerror="true">
             <arg value="--details" />
             <arg value="--wide" />
+            <arg value="--datadir" />
+            <arg file="${slocdata.dir}" />
+            <arg value="cutplace" />
             <redirector output="sloccount.sc">
                 <outputfilterchain>
                     <linecontains negate="true">
@@ -95,11 +100,12 @@
                 </outputfilterchain>
             </redirector>
         </exec>
+        <delete dir="${slocdata.dir}" />
     </target>
 
     <target name="pep8" description="build pep8 violations report">
         <echo message="build pep8 violations report" />
-        <exec executable="pep8">
+        <exec executable="pep8" >
             <!--
             Note: We do not use failonerror="true" because any violations results in an exit code
             of 1, which would result in the whole build to be considered failed.
@@ -112,4 +118,11 @@
             <redirector output="pep8.txt" />
         </exec>
     </target>
+
+	<target
+	    name="jenkins"
+	    description="build for continuous integration with Jenkins"
+	    depends="sdist, test, pep8, sloccount"
+	/>
+
 </project>
